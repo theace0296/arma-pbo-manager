@@ -1,0 +1,10 @@
+.vs
+.vscode
+bin
+build
+node_modules
+sdk
+swig
+steam
+wiki
+theace0296-steamworks-*.tgz

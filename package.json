@@ -1,0 +1,16 @@
+{
+  "name": "@theace0296/arma-pbo-manager",
+  "author": "TheAce0296",
+  "license": "MIT",
+  "version": "1.0.0",
+  "description": "A pure-JS implemenation of managing Arma pbo files.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.17.10",
+    "@babel/eslint-parser": "^7.17.0",
+    "eslint": "^8.14.0"
+  }
+}
