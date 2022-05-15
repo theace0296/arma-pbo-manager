@@ -5,7 +5,7 @@ const create = async (pboFile, files = [], options = {}) => {
   for (const file of files) {
     writer.addFile(file);
   }
-  await writer.write();
+  await writer.pack();
 };
 
 const extract = async (path, options = {}) => {
