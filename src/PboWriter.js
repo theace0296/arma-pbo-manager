@@ -22,7 +22,7 @@ module.exports = class PboWriter {
   #handle = null;
   /** @type {Entry[]} */
   #entries = [];
-  /** @type {crypto.Hash} */
+  /** @type {crypto.Hash|Buffer} */
   #checksum = null;
   options = { ...DEFAULT_OPTIONS };
   constructor(file, options = { ...DEFAULT_OPTIONS }) {
@@ -56,7 +56,9 @@ module.exports = class PboWriter {
       return false;
     }
     await this.#handle.write(data);
-    this.#checksum.update(data);
+    if (this.#checksum instanceof crypto.Hash) {
+      this.#checksum.update(data);
+    }
     return true;
   }
 
@@ -71,7 +73,11 @@ module.exports = class PboWriter {
       }
       return;
     }
-    await this.#writeData(entry.file);
+    await this.#writeData(
+      entry.file && entry.root
+        ? path.join(entry.root, path.basename(entry.file))
+        : '',
+    );
     await this.#writeData(entry.packing_method);
     await this.#writeData(entry.original_size);
     await this.#writeData(entry.reserved);
@@ -143,15 +149,17 @@ module.exports = class PboWriter {
       console.error(e);
       await this.#handle.close();
       await fsp.rm(this.#file);
-      return;
+      return false;
     }
 
     // Write Signature
     await this.#writeData('\0', false);
-    await this.#writeData(this.#checksum.copy().digest());
+    this.#checksum = this.#checksum.copy().digest();
+    await this.#writeData(this.#checksum, false);
 
     // Close FD
     await this.#handle.close();
+    return true;
   }
   addFile(file) {
     if (!fs.existsSync(file)) {

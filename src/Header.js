@@ -7,7 +7,7 @@ module.exports = class Header extends Entry {
     product: null,
     version: null,
   };
-  constructor({ prefix, product, version }) {
+  constructor({ prefix, product, version } = {}) {
     super();
     this.packing_method = PACKING_METHODS.Version;
     if (prefix) {
