@@ -6,21 +6,21 @@ const { PACKING_METHODS } = require('./constants');
 module.exports = class Entry {
   /** @type {string} */
   file = '';
-  /** @type {string} */
-  path = '';
   packing_method = PACKING_METHODS.Null;
   original_size = 0x0;
   reserved = 0x0;
   timestamp = 0x0;
   data_size = 0x0;
   data_offset = -1;
+  isFile = false;
+  isDir = false;
+  children = [];
   constructor(file = null) {
     this.setFile(file);
   }
   setFile(file) {
     if (file && fs.existsSync(file)) {
       this.file = file;
-      this.path = path.dirname(file);
       const stat = fs.lstatSync(file);
       this.data_size = stat.size;
       this.timestamp = Math.floor(stat.mtimeMs / 1000);
@@ -28,6 +28,14 @@ module.exports = class Entry {
         this.timestamp = Math.floor(Date.now() / 1000);
       }
       this.packing_method = PACKING_METHODS.Uncompressed;
+      this.isFile = stat.isFile();
+      this.isDir = stat.isDirectory();
+      if (this.isDir) {
+        this.children = fs
+          .readdirSync(file)
+          .filter(child => !['.', '..'].includes(child))
+          .map(child => new Entry(path.join(file, child)));
+      }
     }
   }
   isNull() {
@@ -38,5 +46,8 @@ module.exports = class Entry {
       this.timestamp === 0x0 &&
       this.data_size === 0x0
     );
+  }
+  toString() {
+    return JSON.stringify(this, null, 2);
   }
 };

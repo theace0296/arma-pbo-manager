@@ -60,6 +60,58 @@ module.exports = class PboWriter {
     return true;
   }
 
+  /** @param {Entry|Header} entry */
+  async #writeHeader(entry) {
+    if (!entry) {
+      return;
+    }
+    if (entry.isDir && !(entry instanceof Header)) {
+      for (const child of entry.children) {
+        await this.#writeHeader(child);
+      }
+      return;
+    }
+    await this.#writeData(entry.file);
+    await this.#writeData(entry.packing_method);
+    await this.#writeData(entry.original_size);
+    await this.#writeData(entry.reserved);
+    await this.#writeData(entry.timestamp);
+    await this.#writeData(entry.data_size);
+    if (entry instanceof Header) {
+      for (const [key, value] of Object.entries(entry.properties)) {
+        await this.#writeData(key);
+        if (!value) {
+          continue;
+        }
+        await this.#writeData(value);
+      }
+      await this.#writeData('');
+    }
+  }
+
+  /** @param {Entry|Header} entry */
+  async #writeFile(entry) {
+    if (!entry) {
+      return;
+    }
+    if (entry.isDir && !(entry instanceof Header)) {
+      for (const child of entry.children) {
+        await this.#writeFile(child);
+      }
+      return;
+    }
+    const fileHandle = await fsp.open(entry.file);
+    let bytesRead;
+    while (bytesRead === undefined || bytesRead > 0) {
+      const buffer = Buffer.alloc(PACKING_BUFFER_SIZE);
+      ({ bytesRead } = await fileHandle.read(buffer));
+      if (bytesRead) {
+        await this.#writeData(Buffer.from(buffer, 0, bytesRead));
+      }
+    }
+    await fileHandle.close();
+  }
+
   async pack() {
     if (this.options.overrite && fs.existsSync(this.#file)) {
       await fsp.rm(this.#file, { force: true });
@@ -69,22 +121,7 @@ module.exports = class PboWriter {
     try {
       // Write Headers
       for (const entry of this.#entries) {
-        await this.#writeData(entry.path);
-        await this.#writeData(entry.packing_method);
-        await this.#writeData(entry.original_size);
-        await this.#writeData(entry.reserved);
-        await this.#writeData(entry.timestamp);
-        await this.#writeData(entry.data_size);
-        if (entry instanceof Header) {
-          for (const [key, value] of Object.entries(entry.properties)) {
-            await this.#writeData(key);
-            if (!value) {
-              continue;
-            }
-            await this.#writeData(value);
-          }
-          await this.#writeData('');
-        }
+        await this.#writeHeader(entry);
       }
       await this.#writeData(Buffer.alloc(HEADER_ENTRY_DEFAULT_SIZE));
 
@@ -95,20 +132,7 @@ module.exports = class PboWriter {
         case PACKING_METHODS.Null:
           continue;
         case PACKING_METHODS.Uncompressed: {
-          if (fs.lstatSync(entry.file).isDirectory()) {
-            continue;
-          } else {
-            const fileHandle = await fsp.open(entry.file);
-            let bytesRead;
-            while (bytesRead === undefined || bytesRead > 0) {
-              const buffer = Buffer.alloc(PACKING_BUFFER_SIZE);
-              ({ bytesRead } = await fileHandle.read(buffer));
-              if (bytesRead) {
-                await this.#writeData(Buffer.from(buffer, 0, bytesRead));
-              }
-            }
-            await fileHandle.close();
-          }
+          this.#writeFile(entry);
           break;
         }
         default:
