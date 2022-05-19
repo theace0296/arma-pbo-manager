@@ -3,11 +3,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
-const {
-  HEADER_ENTRY_DEFAULT_SIZE,
-  PACKING_METHODS,
-  PACKING_BUFFER_SIZE,
-} = require('./constants');
+const { HEADER_ENTRY_DEFAULT_SIZE, PACKING_METHODS } = require('./constants');
 const Entry = require('./Entry');
 const Header = require('./Header');
 
@@ -38,24 +34,14 @@ module.exports = class PboWriter {
     this.#checksum = crypto.createHash('sha1');
   }
 
-  async #writeData(value = '', nullTerminated = true) {
-    if (!this.#handle) {
+  async #writeData(data) {
+    if (!this.#handle || !data || !(data instanceof Buffer)) {
       return false;
     }
-    let data;
-    if (value instanceof Buffer) {
-      data = value;
-    } else if (typeof value === 'string') {
-      data = Buffer.from(`${value.toString()}${nullTerminated ? '\0' : ''}`);
-    } else if (typeof value === 'number') {
-      const buffer = Buffer.alloc(4);
-      buffer.writeUint32LE(value, 0);
-      data = buffer;
+    const { bytesWritten } = await this.#handle.write(data);
+    if (bytesWritten !== data.length) {
+      throw new Error('An error occured while writing the file!');
     }
-    if (!data) {
-      return false;
-    }
-    await this.#handle.write(data);
     if (this.#checksum instanceof crypto.Hash) {
       this.#checksum.update(data);
     }
@@ -73,26 +59,7 @@ module.exports = class PboWriter {
       }
       return;
     }
-    await this.#writeData(
-      entry.file && entry.root
-        ? path.join(entry.root, path.basename(entry.file))
-        : '',
-    );
-    await this.#writeData(entry.packing_method);
-    await this.#writeData(entry.original_size);
-    await this.#writeData(entry.reserved);
-    await this.#writeData(entry.timestamp);
-    await this.#writeData(entry.data_size);
-    if (entry instanceof Header) {
-      for (const [key, value] of Object.entries(entry.properties)) {
-        await this.#writeData(key);
-        if (!value) {
-          continue;
-        }
-        await this.#writeData(value);
-      }
-      await this.#writeData('');
-    }
+    await this.#writeData(entry.getHeaderData());
   }
 
   /** @param {Entry|Header} entry */
@@ -106,16 +73,7 @@ module.exports = class PboWriter {
       }
       return;
     }
-    const fileHandle = await fsp.open(entry.file);
-    let bytesRead;
-    while (bytesRead === undefined || bytesRead > 0) {
-      const buffer = Buffer.alloc(PACKING_BUFFER_SIZE);
-      ({ bytesRead } = await fileHandle.read(buffer));
-      if (bytesRead) {
-        await this.#writeData(Buffer.from(buffer, 0, bytesRead));
-      }
-    }
-    await fileHandle.close();
+    await entry.getData(async buffer => await this.#writeData(buffer));
   }
 
   async pack() {
@@ -138,7 +96,7 @@ module.exports = class PboWriter {
         case PACKING_METHODS.Null:
           continue;
         case PACKING_METHODS.Uncompressed: {
-          this.#writeFile(entry);
+          await this.#writeFile(entry);
           break;
         }
         default:
@@ -153,7 +111,7 @@ module.exports = class PboWriter {
     }
 
     // Write Signature
-    await this.#writeData('\0', false);
+    await this.#writeData(Buffer.alloc(1));
     this.#checksum = this.#checksum.copy().digest();
     await this.#writeData(this.#checksum, false);
 

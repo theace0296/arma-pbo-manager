@@ -1,7 +1,9 @@
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 
-const { PACKING_METHODS } = require('./constants');
+const { PACKING_METHODS, PACKING_BUFFER_SIZE } = require('./constants');
+const { convertToBuffer } = require('./utilities');
 
 module.exports = class Entry {
   file = '';
@@ -19,12 +21,50 @@ module.exports = class Entry {
   constructor(file = null, root = '/') {
     this.setFile(file, root);
   }
+  getHeaderData() {
+    const buffers = [
+      convertToBuffer(
+        this.file && this.root
+          ? path.join(this.root, path.basename(this.file))
+          : '',
+      ),
+      convertToBuffer(this.packing_method),
+      convertToBuffer(this.original_size),
+      convertToBuffer(this.reserved),
+      convertToBuffer(this.timestamp),
+      convertToBuffer(this.data_size),
+    ];
+    return Buffer.concat(buffers);
+  }
+  async getData(callback = async () => undefined) {
+    if (!this.file || !fs.existsSync(this.file)) {
+      return;
+    }
+    const fileHandle = await fsp.open(this.file);
+    const fileSize = (await fileHandle.stat()).size;
+    let bytesRead;
+    let totalBytesRead = 0;
+    while (totalBytesRead < fileSize) {
+      const buffer = Buffer.alloc(
+        fileSize - totalBytesRead < PACKING_BUFFER_SIZE
+          ? fileSize - totalBytesRead
+          : PACKING_BUFFER_SIZE,
+      );
+      ({ bytesRead } = await fileHandle.read(buffer, 0, buffer.length));
+      if (bytesRead) {
+        await callback(buffer);
+        totalBytesRead += bytesRead;
+      }
+    }
+    await fileHandle.close();
+  }
   setFile(file, root = '/') {
     if (file && fs.existsSync(file)) {
       this.file = file;
       this.root = root;
       const stat = fs.lstatSync(file);
       this.data_size = stat.size;
+      this.original_size = stat.size;
       this.timestamp = Math.floor(stat.mtimeMs / 1000);
       if (isNaN(this.timestamp)) {
         this.timestamp = Math.floor(Date.now() / 1000);
