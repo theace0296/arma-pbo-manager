@@ -1,6 +1,3 @@
-const fsp = require('fs/promises');
-const path = require('path');
-
 const PboWriter = require('./PboWriter');
 const PboReader = require('./PboReader');
 
@@ -13,21 +10,9 @@ const create = async (pboFile, files = [], options = {}) => {
 };
 
 const extract = async (pboFile, dest, options = {}) => {
-  const reader = new PboReader(pboFile, options);
+  const reader = new PboReader(pboFile, { ...options, dest });
   if (!await reader.unpack()) {
     return;
-  }
-  for (const entry of reader.getEntries()) {
-    if (entry.file) {
-      await fsp.mkdir(path.join(dest, entry.root || path.dirname(entry.file)), { recursive: true });
-      const handle = await fsp.open(path.join(dest, entry.file), 'wx');
-      try {
-        await handle.write(entry.data);
-      } catch (error) {
-        console.error(error);
-      }
-      await handle.close();
-    }
   }
 };
 

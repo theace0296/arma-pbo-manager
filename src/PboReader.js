@@ -1,11 +1,13 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const crypto = require('crypto');
+const path = require('path');
 const {
   HEADER_ENTRY_DEFAULT_SIZE,
   PACKING_METHODS,
   NULL_TERM,
   DOUBLE_NULL_TERM,
+  EMPTY_BUFFER,
 } = require('./constants');
 const { readUntilMatch } = require('./utilities');
 const Entry = require('./Entry');
@@ -13,6 +15,7 @@ const Header = require('./Header');
 
 const DEFAULT_OPTIONS = {
   signed: false,
+  dest  : null,
 };
 
 const readEntry = async (handle, cursor) => {
@@ -122,6 +125,19 @@ module.exports = class PboReader {
           await entry.readData(this.#handle);
           if (this.#checksum instanceof crypto.Hash) {
             this.#checksum.update(entry.data);
+          }
+          if (this.options.dest && entry.file) {
+            await fsp.mkdir(path.join(this.options.dest, entry.root || path.dirname(entry.file)), { recursive: true });
+            const handle = await fsp.open(path.join(this.options.dest, entry.file), 'wx');
+            try {
+              await handle.write(entry.data);
+            } catch (error) {
+              console.error(error);
+            }
+            await handle.close();
+          }
+          if (this.options.dest) { // If we're extracting to a location, don't store data in memory
+            entry.data = EMPTY_BUFFER;
           }
           fileCursor += entry.getOriginalSize();
           break;
