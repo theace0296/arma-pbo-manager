@@ -19,7 +19,49 @@ const readEntry = async (handle, cursor) => {
   let entry = new Entry();
   const result = await entry.readHeaderData(handle, cursor);
   if (entry.packing_method === PACKING_METHODS.Version) {
+    let resultCursor = result.cursor;
     entry = Header.headerFromEntry(entry);
+    const { buffer: headerBuffer } = await readUntilMatch(
+      handle,
+      resultCursor,
+      DOUBLE_NULL_TERM,
+    );
+    let headerCursor = 0;
+    resultCursor += headerBuffer.length;
+    while (true) {
+      const keyHeaderBuffer = headerBuffer.subarray(headerCursor);
+      const keyIndex = keyHeaderBuffer.indexOf(NULL_TERM);
+      const key = keyHeaderBuffer.subarray(0, keyIndex).toString();
+      if (!key) {
+        resultCursor -= headerBuffer.length - (headerCursor + 1);
+        break;
+      }
+      headerCursor += keyIndex + 1;
+      const valueHeaderBuffer = headerBuffer.subarray(headerCursor);
+      const valueIndex = valueHeaderBuffer.indexOf(NULL_TERM);
+      const value = valueHeaderBuffer.subarray(0, valueIndex).toString();
+      headerCursor += valueIndex + 1;
+      entry.properties[key] = value;
+    }
+    if (headerCursor > 0) {
+      const buffer = Buffer.concat([result.buffer, headerBuffer]);
+      return {
+        ...result,
+        entry,
+        buffer   : buffer,
+        bytesRead: buffer.length,
+        cursor   : resultCursor,
+      };
+    } else {
+      const buffer = Buffer.concat([result.buffer, Buffer.alloc(1)]);
+      return {
+        ...result,
+        entry,
+        buffer   : buffer,
+        bytesRead: buffer.length,
+        cursor   : resultCursor,
+      };
+    }
   }
   return { ...result, entry };
 };
@@ -61,37 +103,6 @@ module.exports = class PboReader {
         if (this.#checksum instanceof crypto.Hash) {
           this.#checksum.update(buffer);
         }
-        if (entry instanceof Header) {
-          const { buffer: headerBuffer } = await readUntilMatch(
-            this.#handle,
-            fileCursor,
-            DOUBLE_NULL_TERM,
-          );
-          let headerCursor = 0;
-          fileCursor += headerBuffer.length;
-          while (true) {
-            const keyHeaderBuffer = headerBuffer.subarray(headerCursor);
-            const keyIndex = keyHeaderBuffer.indexOf(NULL_TERM);
-            const key = keyHeaderBuffer.subarray(0, keyIndex).toString();
-            if (!key) {
-              fileCursor -= headerBuffer.length - (headerCursor + 1);
-              break;
-            }
-            headerCursor += keyIndex + 1;
-            const valueHeaderBuffer = headerBuffer.subarray(headerCursor);
-            const valueIndex = valueHeaderBuffer.indexOf(NULL_TERM);
-            const value = valueHeaderBuffer.subarray(0, valueIndex).toString();
-            headerCursor += valueIndex + 1;
-            entry.properties[key] = value;
-          }
-          if (this.#checksum instanceof crypto.Hash) {
-            if (headerCursor > 0) {
-              this.#checksum.update(headerBuffer);
-            } else {
-              this.#checksum.update(NULL_TERM);
-            }
-          }
-        }
         if (!entry.isNull()) {
           this.#entries.push(entry);
         } else {
@@ -105,7 +116,7 @@ module.exports = class PboReader {
         case PACKING_METHODS.Version:
         case PACKING_METHODS.Null:
           continue;
-        // case PACKING_METHODS.Compressed:
+          // case PACKING_METHODS.Compressed:
         case PACKING_METHODS.Uncompressed: {
           entry.data_offset = fileCursor;
           await entry.readData(this.#handle);
