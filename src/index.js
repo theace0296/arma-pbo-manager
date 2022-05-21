@@ -18,8 +18,8 @@ const extract = async (pboFile, dest, options = {}) => {
     return;
   }
   for (const entry of reader.getEntries()) {
-    if (entry.file && entry.root) {
-      await fsp.mkdir(path.join(dest, entry.root), { recursive: true });
+    if (entry.file) {
+      await fsp.mkdir(path.join(dest, entry.root || path.dirname(entry.file)), { recursive: true });
       const handle = await fsp.open(path.join(dest, entry.file), 'wx');
       try {
         await handle.write(entry.data);

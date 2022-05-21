@@ -1,14 +1,27 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
-const path = require('path');
 const crypto = require('crypto');
-const BUFFER_MAX_LENGTH = require('buffer').constants.MAX_LENGTH;
-const { HEADER_ENTRY_DEFAULT_SIZE, PACKING_METHODS } = require('./constants');
+const {
+  HEADER_ENTRY_DEFAULT_SIZE,
+  PACKING_METHODS,
+  NULL_TERM,
+  DOUBLE_NULL_TERM,
+} = require('./constants');
+const { readUntilMatch } = require('./utilities');
 const Entry = require('./Entry');
 const Header = require('./Header');
 
 const DEFAULT_OPTIONS = {
   signed: false,
+};
+
+const readEntry = async (handle, cursor) => {
+  let entry = new Entry();
+  const result = await entry.readHeaderData(handle, cursor);
+  if (entry.packing_method === PACKING_METHODS.Version) {
+    entry = Header.headerFromEntry(entry);
+  }
+  return { ...result, entry };
 };
 
 module.exports = class PboReader {
@@ -39,118 +52,50 @@ module.exports = class PboReader {
       let fileCursor = 0;
 
       // Read Headers
-      let bytesRead;
-      while (bytesRead === undefined || bytesRead > 0) {
-        const buffer = Buffer.alloc(HEADER_ENTRY_DEFAULT_SIZE);
-        ({ bytesRead } = await this.#handle.read(buffer, 0, buffer.length, fileCursor));
-        if (bytesRead === HEADER_ENTRY_DEFAULT_SIZE) {
-          let cursor = 0;
-          const index = buffer.indexOf(0x0);
-          const fileBuffer = buffer.subarray(cursor, index);
-          const file = fileBuffer.toString();
-          fileCursor += index + 1;
-          const fullBuffer = await (async () => {
-            if (file) {
-              const additionalBuffer = Buffer.alloc(fileBuffer.length);
-              const { bytesRead } = await this.#handle.read(
-                additionalBuffer,
-                0,
-                additionalBuffer.length,
-                fileCursor,
-              );
-              if (bytesRead !== additionalBuffer.length || bytesRead === 0) {
-                throw new Error('Error occured reading file!');
-              }
-              return Buffer.concat([buffer, additionalBuffer]);
+      while (true) {
+        const { entry, buffer, cursor } = await readEntry(
+          this.#handle,
+          fileCursor,
+        );
+        fileCursor = cursor;
+        if (this.#checksum instanceof crypto.Hash) {
+          this.#checksum.update(buffer);
+        }
+        if (entry instanceof Header) {
+          const { buffer: headerBuffer } = await readUntilMatch(
+            this.#handle,
+            fileCursor,
+            DOUBLE_NULL_TERM,
+          );
+          let headerCursor = 0;
+          fileCursor += headerBuffer.length;
+          while (true) {
+            const keyHeaderBuffer = headerBuffer.subarray(headerCursor);
+            const keyIndex = keyHeaderBuffer.indexOf(NULL_TERM);
+            const key = keyHeaderBuffer.subarray(0, keyIndex).toString();
+            if (!key) {
+              fileCursor -= headerBuffer.length - (headerCursor + 1);
+              break;
             }
-            return buffer;
-          })();
-          cursor += index + 1;
-          const packing_method = fullBuffer.readUint32LE(cursor);
-          fileCursor += 4;
-          cursor += 4;
-          const original_size = fullBuffer.readUint32LE(cursor);
-          fileCursor += 4;
-          cursor += 4;
-          const reserved = fullBuffer.readUint32LE(cursor);
-          fileCursor += 4;
-          cursor += 4;
-          const timestamp = fullBuffer.readUint32LE(cursor);
-          fileCursor += 4;
-          cursor += 4;
-          const data_size = fullBuffer.readUint32LE(cursor);
-          fileCursor += 4;
-          cursor += 4;
-
+            headerCursor += keyIndex + 1;
+            const valueHeaderBuffer = headerBuffer.subarray(headerCursor);
+            const valueIndex = valueHeaderBuffer.indexOf(NULL_TERM);
+            const value = valueHeaderBuffer.subarray(0, valueIndex).toString();
+            headerCursor += valueIndex + 1;
+            entry.properties[key] = value;
+          }
           if (this.#checksum instanceof crypto.Hash) {
-            this.#checksum.update(fullBuffer);
-          }
-
-          const entry =
-            packing_method === PACKING_METHODS.Version
-              ? new Header()
-              : new Entry();
-          entry.file = file;
-          entry.root = file ? path.dirname(file) : '';
-          entry.packing_method = packing_method;
-          entry.original_size = original_size;
-          entry.reserved = reserved;
-          entry.timestamp = timestamp;
-          entry.data_size = data_size;
-          if (entry instanceof Header) {
-            const endOfHeader = Buffer.alloc(2);
-            let headerBuffer = Buffer.alloc(BUFFER_MAX_LENGTH);
-            let index = 0;
-            while (
-              index === 0 ||
-              !headerBuffer.subarray(0, index).includes(endOfHeader)
-            ) {
-              const { bytesRead } = await this.#handle.read(
-                headerBuffer,
-                index,
-                1,
-                fileCursor + index,
-              );
-              index++;
-              if (bytesRead === 0) {
-                throw new Error('Error occured reading file!');
-              }
-            }
-            headerBuffer = headerBuffer.subarray(0, index);
-            let headerCursor = 0;
-            fileCursor += headerBuffer.length;
-            while (true) {
-              const keyHeaderBuffer = headerBuffer.subarray(headerCursor);
-              const keyIndex = keyHeaderBuffer.indexOf(0x0);
-              const key = keyHeaderBuffer.subarray(0, keyIndex).toString();
-              if (!key) {
-                fileCursor -= headerBuffer.length - (headerCursor + 1);
-                break;
-              }
-              headerCursor += keyIndex + 1;
-              const valueHeaderBuffer = headerBuffer.subarray(headerCursor);
-              const valueIndex = valueHeaderBuffer.indexOf(0x0);
-              const value = valueHeaderBuffer
-                .subarray(0, valueIndex)
-                .toString();
-              headerCursor += valueIndex + 1;
-              entry.properties[key] = value;
-            }
-            if (this.#checksum instanceof crypto.Hash && headerCursor > 0) {
+            if (headerCursor > 0) {
               this.#checksum.update(headerBuffer);
+            } else {
+              this.#checksum.update(NULL_TERM);
             }
           }
-          if (!entry.isNull() || entry instanceof Header) {
-            this.#entries.push(entry);
-          } else {
-            break;
-          }
-        } else if (bytesRead === 0 && this.#entries.length === 0) {
-          throw new Error('Null entry not found!');
-        } else if (bytesRead === 0) {
-          throw new Error('Error occured reading file!');
+        }
+        if (!entry.isNull()) {
+          this.#entries.push(entry);
         } else {
-          throw new Error('Header entry size too small!');
+          break;
         }
       }
 
@@ -160,18 +105,14 @@ module.exports = class PboReader {
         case PACKING_METHODS.Version:
         case PACKING_METHODS.Null:
           continue;
+        // case PACKING_METHODS.Compressed:
         case PACKING_METHODS.Uncompressed: {
           entry.data_offset = fileCursor;
-          const buffer = Buffer.alloc(entry.data_size);
-          ({ bytesRead } = await this.#handle.read(buffer, 0, buffer.length, fileCursor));
-          if (bytesRead !== entry.data_size) {
-            throw new Error('Data entry size did not match!');
-          }
+          await entry.readData(this.#handle);
           if (this.#checksum instanceof crypto.Hash) {
-            this.#checksum.update(buffer);
+            this.#checksum.update(entry.data);
           }
-          entry.data = buffer;
-          fileCursor += entry.data_size;
+          fileCursor += entry.getOriginalSize();
           break;
         }
         default:
@@ -184,12 +125,12 @@ module.exports = class PboReader {
         throw new Error('Signature not found!');
       }
       const zeroByteBuffer = Buffer.alloc(1);
-      ({ bytesRead } = await this.#handle.read(
+      let { bytesRead } = await this.#handle.read(
         zeroByteBuffer,
         0,
         zeroByteBuffer.length,
         fileCursor,
-      ));
+      );
       fileCursor += 1;
       if (this.#checksum instanceof crypto.Hash) {
         this.#checksum.update(zeroByteBuffer);
@@ -208,7 +149,7 @@ module.exports = class PboReader {
       this.#checksum = this.#checksum.copy().digest();
       if (!signatureBuffer.equals(this.#checksum) && this.options.signed) {
         throw new Error('Signature did not match data!');
-      } else if (signatureBuffer.equals(this.#checksum)) {
+      } else if (!signatureBuffer.equals(this.#checksum)) {
         console.warn('Signature did not match data!');
       }
     } catch (e) {

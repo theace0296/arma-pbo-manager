@@ -1,4 +1,4 @@
-const { PACKING_METHODS } = require('./constants');
+const { PACKING_METHODS, NULL_TERM } = require('./constants');
 const { convertToBuffer } = require('./utilities');
 const Entry = require('./Entry');
 
@@ -8,6 +8,11 @@ module.exports = class Header extends Entry {
     product: null,
     version: null,
   };
+  static headerFromEntry(entry) {
+    const header = new Header();
+    Object.assign(header, entry);
+    return header;
+  }
   constructor({ prefix, product, version } = {}) {
     super();
     this.packing_method = PACKING_METHODS.Version;
@@ -31,8 +36,11 @@ module.exports = class Header extends Entry {
         }
         return [...acc, convertToBuffer(value)];
       }, []),
-      Buffer.alloc(1),
+      NULL_TERM,
     ];
     return Buffer.concat(buffers);
+  }
+  isNull() {
+    return false;
   }
 };
