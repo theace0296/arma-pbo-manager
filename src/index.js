@@ -18,6 +18,7 @@ const extract = async (pboFile, dest, options = {}) => {
 
 module.exports = {
   PboWriter,
+  PboReader,
   create,
   extract,
 };
